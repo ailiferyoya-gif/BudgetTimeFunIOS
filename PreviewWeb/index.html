@@ -10,10 +10,12 @@
   <main class="app">
     <section class="panel">
       <div class="section-title">条件</div>
-      <label>現在地<input id="location" value="名古屋駅"></label>
-      <label>金額 <strong id="budgetValue">3000円</strong><input id="budget" type="range" min="0" max="20000" step="500" value="3000"></label>
+      <label>現在地名<input id="location" value="現在地"></label>
+      <button id="useLocation" class="location-button" type="button">現在地を取得</button>
+      <p id="locationStatus" class="status">現在地は未取得です。手入力だけでも候補を表示できます。</p>
+      <label>金額 <strong id="budgetValue">3,000円</strong><input id="budget" type="range" min="0" max="20000" step="500" value="3000"></label>
       <label>時間 <strong id="hoursValue">3時間</strong><input id="hours" type="range" min="1" max="12" step="1" value="3"></label>
-      <div class="moods" role="group" aria-label="気分">
+      <div class="moods" role="group" aria-label="目的">
         <button class="active" data-mood="relax">ゆっくり</button>
         <button data-mood="active">動きたい</button>
         <button data-mood="culture">発見したい</button>

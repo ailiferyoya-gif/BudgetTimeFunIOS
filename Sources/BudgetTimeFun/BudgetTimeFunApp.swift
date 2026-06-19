@@ -1,3 +1,5 @@
+import CoreLocation
+import MapKit
 import SwiftUI
 
 @main
@@ -10,7 +12,7 @@ struct BudgetTimeFunApp: App {
 }
 
 struct PlannerInput: Equatable {
-    var location = "名古屋駅"
+    var locationName = "現在地"
     var budget = 3000
     var hours = 3
     var mood: Mood = .relax
@@ -32,6 +34,42 @@ enum Mood: String, CaseIterable, Identifiable {
         case .food: "fork.knife"
         }
     }
+
+    var searchQuery: String {
+        switch self {
+        case .relax: "cafe park spa"
+        case .active: "park bowling amusement"
+        case .culture: "museum gallery bookstore"
+        case .food: "restaurant cafe market"
+        }
+    }
+
+    var baseCost: Int {
+        switch self {
+        case .relax: 1400
+        case .active: 1200
+        case .culture: 1600
+        case .food: 2200
+        }
+    }
+
+    var baseMinutes: Int {
+        switch self {
+        case .relax: 110
+        case .active: 120
+        case .culture: 100
+        case .food: 90
+        }
+    }
+}
+
+struct LocatedPoint: Equatable {
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
 }
 
 struct PlanIdea: Identifiable, Hashable {
@@ -43,14 +81,90 @@ struct PlanIdea: Identifiable, Hashable {
     let steps: [String]
     let tags: [String]
     let systemImage: String
+    let placeName: String?
+    let address: String?
+    let distanceMeters: Double?
+    let mapURL: URL?
+}
+
+@MainActor
+final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var locatedPoint: LocatedPoint?
+    @Published var statusText = "現在地は未取得です"
+    @Published var isRequesting = false
+
+    private let manager = CLLocationManager()
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    }
+
+    func requestCurrentLocation() {
+        isRequesting = true
+        statusText = "現在地を取得しています..."
+
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse:
+            manager.requestLocation()
+        case .denied, .restricted:
+            isRequesting = false
+            statusText = "位置情報の利用が許可されていません"
+        @unknown default:
+            isRequesting = false
+            statusText = "位置情報の状態を確認できません"
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
+            manager.requestLocation()
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else {
+            isRequesting = false
+            statusText = "現在地を取得できませんでした"
+            return
+        }
+
+        locatedPoint = LocatedPoint(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
+        isRequesting = false
+        statusText = "現在地を取得しました"
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        isRequesting = false
+        statusText = "現在地取得に失敗しました: \(error.localizedDescription)"
+    }
+}
+
+enum SearchState: Equatable {
+    case idle
+    case loading
+    case loaded([PlanIdea])
+    case failed(String)
 }
 
 struct PlannerView: View {
+    @StateObject private var locationProvider = LocationProvider()
     @State private var input = PlannerInput()
     @State private var selectedIdea: PlanIdea?
+    @State private var searchState: SearchState = .idle
 
-    private var ideas: [PlanIdea] {
-        PlanGenerator.ideas(for: input)
+    private var fallbackIdeas: [PlanIdea] {
+        PlanGenerator.fallbackIdeas(for: input)
+    }
+
+    private var displayedIdeas: [PlanIdea] {
+        if case .loaded(let ideas) = searchState, !ideas.isEmpty {
+            return ideas
+        }
+        return fallbackIdeas
     }
 
     var body: some View {
@@ -58,6 +172,7 @@ struct PlannerView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     inputPanel
+                    locationPanel
                     summaryStrip
                     ideasSection
                 }
@@ -67,8 +182,23 @@ struct PlannerView: View {
             .navigationTitle("予算時間プラン")
             .navigationBarTitleDisplayMode(.large)
             .sheet(item: $selectedIdea) { idea in
-                IdeaDetailView(idea: idea, location: input.location)
+                IdeaDetailView(idea: idea, location: input.locationName)
                     .presentationDetents([.medium, .large])
+            }
+            .onChange(of: input.mood) {
+                refreshNearbyPlaces()
+            }
+            .onChange(of: input.budget) {
+                refreshNearbyPlaces()
+            }
+            .onChange(of: input.hours) {
+                refreshNearbyPlaces()
+            }
+            .onChange(of: locationProvider.locatedPoint) {
+                if locationProvider.locatedPoint != nil {
+                    input.locationName = "現在地周辺"
+                    refreshNearbyPlaces()
+                }
             }
         }
     }
@@ -78,7 +208,7 @@ struct PlannerView: View {
             Label("条件", systemImage: "slider.horizontal.3")
                 .font(.headline)
 
-            TextField("現在地", text: $input.location)
+            TextField("現在地名", text: $input.locationName)
                 .textInputAutocapitalization(.never)
                 .submitLabel(.done)
                 .padding(12)
@@ -114,7 +244,7 @@ struct PlannerView: View {
                 }
             }
 
-            Picker("気分", selection: $input.mood) {
+            Picker("目的", selection: $input.mood) {
                 ForEach(Mood.allCases) { mood in
                     Label(mood.rawValue, systemImage: mood.systemImage)
                         .tag(mood)
@@ -126,14 +256,47 @@ struct PlannerView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
+    private var locationPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "location.viewfinder")
+                    .font(.title3)
+                    .frame(width: 38, height: 38)
+                    .background(AppPalette.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                    .foregroundStyle(AppPalette.accent)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("現在地から探す")
+                        .font(.headline)
+                    Text(locationProvider.statusText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            Button {
+                locationProvider.requestCurrentLocation()
+            } label: {
+                Label(locationProvider.isRequesting ? "取得中" : "現在地を取得", systemImage: "location")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(locationProvider.isRequesting)
+        }
+        .padding(16)
+        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private var summaryStrip: some View {
-        HStack(spacing: 10) {
-            InfoPill(icon: "mappin.and.ellipse", value: input.location)
+        FlowLayout(spacing: 8) {
+            InfoPill(icon: "mappin.and.ellipse", value: input.locationName)
             InfoPill(icon: "banknote", value: "最大\(input.budget)円")
             InfoPill(icon: "timer", value: "\(input.hours)時間以内")
+            InfoPill(icon: input.mood.systemImage, value: input.mood.rawValue)
         }
         .font(.caption)
-        .lineLimit(1)
     }
 
     private var ideasSection: some View {
@@ -142,18 +305,48 @@ struct PlannerView: View {
                 Text("おすすめ案")
                     .font(.title2.bold())
                 Spacer()
-                Text("\(ideas.count)件")
+                Text("\(displayedIdeas.count)件")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
-            ForEach(ideas) { idea in
+            if case .loading = searchState {
+                ProgressView("周辺の場所を検索しています")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if case .failed(let message) = searchState {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(displayedIdeas) { idea in
                 Button {
                     selectedIdea = idea
                 } label: {
                     IdeaCard(idea: idea)
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func refreshNearbyPlaces() {
+        guard let point = locationProvider.locatedPoint else {
+            searchState = .idle
+            return
+        }
+
+        let input = input
+        searchState = .loading
+
+        Task {
+            do {
+                let ideas = try await LocationSearchService.search(input: input, point: point)
+                searchState = .loaded(ideas)
+            } catch {
+                searchState = .failed("周辺検索に失敗しました。固定プランを表示しています。")
             }
         }
     }
@@ -200,12 +393,21 @@ struct IdeaCard: View {
             HStack {
                 Label("\(idea.cost)円", systemImage: "yensign.circle")
                 Label("\(idea.minutes)分", systemImage: "clock")
+                if let distance = idea.distanceMeters {
+                    Label(distanceText(distance), systemImage: "figure.walk")
+                }
                 Spacer()
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.tertiary)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            if let placeName = idea.placeName {
+                Label(placeName, systemImage: "mappin.and.ellipse")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             TagRow(tags: idea.tags)
         }
@@ -215,6 +417,13 @@ struct IdeaCard: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(.black.opacity(0.05))
         }
+    }
+
+    private func distanceText(_ meters: Double) -> String {
+        if meters >= 1000 {
+            return String(format: "%.1fkm", meters / 1000)
+        }
+        return "\(Int(meters))m"
     }
 }
 
@@ -239,6 +448,7 @@ struct IdeaDetailView: View {
     let idea: PlanIdea
     let location: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
@@ -247,6 +457,9 @@ struct IdeaDetailView: View {
                     Label(location, systemImage: "mappin.and.ellipse")
                     Label("\(idea.cost)円目安", systemImage: "yensign.circle")
                     Label("\(idea.minutes)分目安", systemImage: "clock")
+                    if let address = idea.address {
+                        Label(address, systemImage: "signpost.right")
+                    }
                 }
 
                 Section("流れ") {
@@ -257,6 +470,16 @@ struct IdeaDetailView: View {
                                 .frame(width: 24, height: 24)
                                 .background(AppPalette.accent.opacity(0.15), in: Circle())
                             Text(step)
+                        }
+                    }
+                }
+
+                if let mapURL = idea.mapURL {
+                    Section {
+                        Button {
+                            openURL(mapURL)
+                        } label: {
+                            Label("地図で開く", systemImage: "map")
                         }
                     }
                 }
@@ -274,9 +497,94 @@ struct IdeaDetailView: View {
     }
 }
 
+enum LocationSearchService {
+    static func search(input: PlannerInput, point: LocatedPoint) async throws -> [PlanIdea] {
+        let coordinate = point.coordinate
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = input.mood.searchQuery
+        request.region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: 2500,
+            longitudinalMeters: 2500
+        )
+
+        let response = try await MKLocalSearch(request: request).start()
+        let origin = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        let maxMinutes = input.hours * 60
+
+        let mapped = response.mapItems.prefix(8).compactMap { item -> PlanIdea? in
+            guard let name = item.name else { return nil }
+            let itemLocation = item.placemark.location
+            let distance = itemLocation.map { $0.distance(from: origin) }
+            let travelMinutes = max(20, Int((distance ?? 600) / 70) + 35)
+            let minutes = min(maxMinutes, max(input.mood.baseMinutes, travelMinutes))
+            let cost = min(input.budget, input.mood.baseCost)
+
+            guard cost <= input.budget, minutes <= maxMinutes else {
+                return nil
+            }
+
+            let address = [
+                item.placemark.locality,
+                item.placemark.thoroughfare,
+                item.placemark.subThoroughfare
+            ]
+                .compactMap { $0 }
+                .joined(separator: " ")
+
+            return PlanIdea(
+                title: "\(name)へ行く",
+                subtitle: subtitle(for: input.mood, place: name),
+                cost: cost,
+                minutes: minutes,
+                steps: steps(for: input.mood, place: name),
+                tags: tags(for: input.mood),
+                systemImage: input.mood.systemImage,
+                placeName: name,
+                address: address.isEmpty ? nil : address,
+                distanceMeters: distance,
+                mapURL: item.url
+            )
+        }
+
+        return mapped.isEmpty ? PlanGenerator.fallbackIdeas(for: input) : Array(mapped)
+    }
+
+    private static func subtitle(for mood: Mood, place: String) -> String {
+        switch mood {
+        case .relax: "\(place)を中心に休憩と散歩を組み合わせる"
+        case .active: "\(place)まで歩いて、周辺も軽く巡る"
+        case .culture: "\(place)で発見を拾い、近くで余韻を整理する"
+        case .food: "\(place)を軸に食事と寄り道を楽しむ"
+        }
+    }
+
+    private static func steps(for mood: Mood, place: String) -> [String] {
+        switch mood {
+        case .relax:
+            ["\(place)へ向かう", "飲み物や休憩時間を確保する", "近くを少し歩いてから戻る"]
+        case .active:
+            ["\(place)まで徒歩ルートを選ぶ", "到着後に周辺スポットを1つ追加する", "残り時間で休憩して戻る"]
+        case .culture:
+            ["\(place)で気になる展示や棚を見る", "印象に残ったものを3つメモする", "近くのカフェやベンチで整理する"]
+        case .food:
+            ["\(place)で食事候補を決める", "予算内でメインを選ぶ", "残り時間で近くの甘味や持ち帰りを探す"]
+        }
+    }
+
+    private static func tags(for mood: Mood) -> [String] {
+        switch mood {
+        case .relax: ["現在地から検索", "休憩", "散歩"]
+        case .active: ["現在地から検索", "徒歩", "軽運動"]
+        case .culture: ["現在地から検索", "発見", "屋内候補"]
+        case .food: ["現在地から検索", "食事", "寄り道"]
+        }
+    }
+}
+
 enum PlanGenerator {
-    static func ideas(for input: PlannerInput) -> [PlanIdea] {
-        let base = catalog(for: input.mood, location: input.location)
+    static func fallbackIdeas(for input: PlannerInput) -> [PlanIdea] {
+        let base = catalog(for: input.mood, location: input.locationName)
         let maxMinutes = input.hours * 60
         let filtered = base.filter { $0.cost <= input.budget && $0.minutes <= maxMinutes }
 
@@ -284,12 +592,16 @@ enum PlanGenerator {
             return [
                 PlanIdea(
                     title: "近場の低予算リセット",
-                    subtitle: "\(input.location)周辺を短時間で楽しむ控えめプラン",
+                    subtitle: "\(input.locationName)周辺を短時間で楽しむ控えめプラン",
                     cost: min(input.budget, 800),
                     minutes: min(maxMinutes, 60),
-                    steps: ["駅や現在地から徒歩圏の公園や商店街へ向かう", "気になる店を1つだけ選んで飲み物を買う", "残り時間で写真を撮りながら戻る"],
+                    steps: ["徒歩圏の公園や商店街へ向かう", "気になる店を1つだけ選んで飲み物を買う", "残り時間で写真を撮りながら戻る"],
                     tags: ["低予算", "徒歩", "短時間"],
-                    systemImage: "figure.walk"
+                    systemImage: "figure.walk",
+                    placeName: nil,
+                    address: nil,
+                    distanceMeters: nil,
+                    mapURL: nil
                 )
             ]
         }
@@ -304,26 +616,30 @@ enum PlanGenerator {
     private static func catalog(for mood: Mood, location: String) -> [PlanIdea] {
         switch mood {
         case .relax:
-            return [
-                PlanIdea(title: "喫茶店と散歩", subtitle: "\(location)近くで一息ついてから軽く歩く", cost: 1400, minutes: 110, steps: ["評価の高い喫茶店へ入る", "季節の飲み物か軽食を選ぶ", "近くの公園か川沿いを20分歩く"], tags: ["休憩", "会話", "雨でも可"], systemImage: "cup.and.saucer"),
-                PlanIdea(title: "温浴施設で回復", subtitle: "移動少なめで疲れを落とす", cost: 2600, minutes: 180, steps: ["現在地から近い温浴施設を選ぶ", "入浴と休憩を90分確保する", "帰る前に軽食かドリンクを取る"], tags: ["回復", "ひとり向き", "屋内"], systemImage: "water.waves")
+            [
+                idea("喫茶店と散歩", "\(location)近くで一息ついてから軽く歩く", 1400, 110, ["休憩", "会話", "雨でも可"], "cup.and.saucer", ["評価の高い喫茶店へ入る", "季節の飲み物か軽食を選ぶ", "近くの公園か川沿いを20分歩く"]),
+                idea("温浴施設で回復", "移動少なめで疲れを落とす", 2600, 180, ["回復", "ひとり向き", "屋内"], "water.waves", ["近い温浴施設を選ぶ", "入浴と休憩を90分確保する", "帰る前に軽食かドリンクを取る"])
             ]
         case .active:
-            return [
-                PlanIdea(title: "街歩きミッション", subtitle: "\(location)から3スポットを巡る", cost: 900, minutes: 120, steps: ["ランドマークを1つ決める", "古い店か路地を探しながら歩く", "最後に気になった店で休む"], tags: ["徒歩", "写真", "軽運動"], systemImage: "figure.walk.motion"),
-                PlanIdea(title: "ボウリング短期戦", subtitle: "2ゲームだけ遊んで切り上げる", cost: 2200, minutes: 100, steps: ["近くのボウリング場を探す", "2ゲームでスコア目標を決める", "余った予算でドリンクを買う"], tags: ["屋内", "友人向き", "短時間"], systemImage: "circle.grid.cross")
+            [
+                idea("街歩きミッション", "\(location)から3スポットを巡る", 900, 120, ["徒歩", "写真", "軽運動"], "figure.walk.motion", ["ランドマークを1つ決める", "古い店か路地を探しながら歩く", "最後に気になった店で休む"]),
+                idea("ボウリング短期戦", "2ゲームだけ遊んで切り上げる", 2200, 100, ["屋内", "友人向き", "短時間"], "circle.grid.cross", ["近くのボウリング場を探す", "2ゲームでスコア目標を決める", "余った予算でドリンクを買う"])
             ]
         case .culture:
-            return [
-                PlanIdea(title: "小さな展示巡り", subtitle: "美術館、資料館、ギャラリーを優先", cost: 1800, minutes: 150, steps: ["現在地周辺の展示を1つ選ぶ", "気になった作品を3つメモする", "近くの書店かカフェで余韻を整理する"], tags: ["展示", "静か", "発見"], systemImage: "building.columns"),
-                PlanIdea(title: "ローカル書店探索", subtitle: "\(location)近くで本と雑貨を探す", cost: 2500, minutes: 90, steps: ["独立系書店か大型書店へ行く", "テーマを1つ決めて棚を見る", "予算内で1冊だけ選ぶ"], tags: ["本", "屋内", "少額"], systemImage: "books.vertical")
+            [
+                idea("小さな展示巡り", "美術館、資料館、ギャラリーを優先", 1800, 150, ["展示", "静か", "発見"], "building.columns", ["周辺の展示を1つ選ぶ", "気になった作品を3つメモする", "近くの書店かカフェで余韻を整理する"]),
+                idea("ローカル書店探索", "\(location)近くで本と雑貨を探す", 2500, 90, ["本", "屋内", "少額"], "books.vertical", ["独立系書店か大型書店へ行く", "テーマを1つ決めて棚を見る", "予算内で1冊だけ選ぶ"])
             ]
         case .food:
-            return [
-                PlanIdea(title: "食べ歩き2軒", subtitle: "軽い店を2つ選んで満足度を上げる", cost: 2800, minutes: 120, steps: ["1軒目は軽食にする", "15分歩いて次の候補へ向かう", "2軒目は甘いものか麺類で締める"], tags: ["食事", "散歩", "満足"], systemImage: "takeoutbag.and.cup.and.straw"),
-                PlanIdea(title: "市場か地下街ランチ", subtitle: "迷う楽しさ込みの食事プラン", cost: 1800, minutes: 80, steps: ["市場、商店街、地下街のどれかへ行く", "行列が短い店を優先する", "残り予算で持ち帰りを1つ買う"], tags: ["ランチ", "短時間", "雨でも可"], systemImage: "fork.knife")
+            [
+                idea("食べ歩き2軒", "軽い店を2つ選んで満足度を上げる", 2800, 120, ["食事", "散歩", "満足"], "takeoutbag.and.cup.and.straw", ["1軒目は軽食にする", "15分歩いて次の候補へ向かう", "2軒目は甘いものか麺類で締める"]),
+                idea("市場か地下街ランチ", "迷う楽しさ込みの食事プラン", 1800, 80, ["ランチ", "短時間", "雨でも可"], "fork.knife", ["市場、商店街、地下街のどれかへ行く", "行列が短い店を優先する", "残り予算で持ち帰りを1つ買う"])
             ]
         }
+    }
+
+    private static func idea(_ title: String, _ subtitle: String, _ cost: Int, _ minutes: Int, _ tags: [String], _ systemImage: String, _ steps: [String]) -> PlanIdea {
+        PlanIdea(title: title, subtitle: subtitle, cost: cost, minutes: minutes, steps: steps, tags: tags, systemImage: systemImage, placeName: nil, address: nil, distanceMeters: nil, mapURL: nil)
     }
 }
 

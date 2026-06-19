@@ -18,7 +18,7 @@ body {
 }
 
 .panel {
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 8px;
   padding: 16px;
@@ -65,10 +65,22 @@ button {
   font-weight: 650;
 }
 
-button.active {
+button:disabled {
+  opacity: 0.62;
+}
+
+button.active,
+.location-button {
   background: #0a6b61;
   color: #fff;
   border-color: #0a6b61;
+}
+
+.status {
+  margin: 0;
+  color: #66706d;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .results-head {
@@ -105,6 +117,11 @@ h1 {
   margin: 0;
   color: #66706d;
   line-height: 1.5;
+}
+
+.place a {
+  color: #0a6b61;
+  font-weight: 700;
 }
 
 .meta,

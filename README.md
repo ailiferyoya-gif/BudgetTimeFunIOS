@@ -1,30 +1,31 @@
 # BudgetTimeFunIOS
 
-現在地、金額、時間、気分を入力すると、その範囲内で楽しめる案を返す SwiftUI アプリの初期実装です。
+現在地、金額、時間、目的を入力すると、その範囲内で楽しめる案と周辺候補を返す SwiftUI アプリの初期実装です。
 
 ## 構成
 
 - `Package.swift`: iOS 17 以上向け Swift Package
 - `Sources/BudgetTimeFun/BudgetTimeFunApp.swift`: SwiftUI アプリ本体
-- `PreviewWeb/`: Windows 上でも挙動を確認できる静的プレビュー
+- `PreviewWeb/`: GitHub Pages で確認できる静的プレビュー
+
+## 機能
+
+- CoreLocation で現在地を取得
+- MapKit `MKLocalSearch` で目的別の周辺候補を検索
+- 候補名、距離、所要時間、予算目安をカード表示
+- 候補詳細から地図を開く
+- Web プレビューではブラウザ Geolocation と OpenStreetMap Overpass API で周辺候補を表示
 
 ## Xcode で開く
 
 1. Xcode で `Package.swift` を開く
 2. scheme に `BudgetTimeFun` を選ぶ
-3. iOS Simulator を選択して Run
+3. iOS Simulator または実機を選択して Run
 
-## 現時点の仕様
+位置情報を使うには、アプリ側の Info 設定に `NSLocationWhenInUseUsageDescription` が必要です。Xcode のターゲット設定で「現在地周辺の遊び先を提案するために位置情報を使用します。」のような説明文を追加してください。
 
-- 現在地はテキスト入力
-- 金額は 0 円から 20,000 円まで 500 円単位
-- 時間は 1 時間から 12 時間
-- 気分は「ゆっくり」「動きたい」「発見したい」「食べたい」
-- 条件に合う候補がない場合は、低予算の徒歩プランを提示
+## Web 確認
 
-## 次にやること
+https://ailiferyoya-gif.github.io/BudgetTimeFunIOS/PreviewWeb/
 
-- CoreLocation で現在地取得を追加
-- MapKit または外部 API で周辺候補を実データ化
-- 保存済みプラン、共有、履歴を追加
-- ユーザーの移動手段や人数を入力条件に追加
+ブラウザで現在地取得を許可すると、目的に合わせた周辺候補が表示されます。
