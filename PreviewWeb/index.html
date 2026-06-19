@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>予算時間プラン Preview</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <section class="panel">
+      <div class="section-title">条件</div>
+      <label>現在地<input id="location" value="名古屋駅"></label>
+      <label>金額 <strong id="budgetValue">3000円</strong><input id="budget" type="range" min="0" max="20000" step="500" value="3000"></label>
+      <label>時間 <strong id="hoursValue">3時間</strong><input id="hours" type="range" min="1" max="12" step="1" value="3"></label>
+      <div class="moods" role="group" aria-label="気分">
+        <button class="active" data-mood="relax">ゆっくり</button>
+        <button data-mood="active">動きたい</button>
+        <button data-mood="culture">発見したい</button>
+        <button data-mood="food">食べたい</button>
+      </div>
+    </section>
+    <section class="results">
+      <div class="results-head">
+        <h1>おすすめ案</h1>
+        <span id="count">0件</span>
+      </div>
+      <div id="cards"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
