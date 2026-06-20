@@ -669,12 +669,15 @@ enum LocationSearchService {
 
 enum PlanGenerator {
     static func fallbackIdeas(for input: PlannerInput) -> [PlanIdea] {
-        let base = catalog(for: input.mood, location: input.locationName).map { idea in
+        let base = (destinationIdeas(for: input) + catalog(for: input.mood, location: input.locationName)).map { idea in
+            let isDestinationIdea = idea.coordinate != nil
+            let adjustedCost = isDestinationIdea ? idea.cost : idea.cost + input.transport.costBuffer
+            let adjustedMinutes = isDestinationIdea ? idea.minutes : idea.minutes + input.transport.timeBufferMinutes
             PlanIdea(
                 title: idea.title,
                 subtitle: idea.subtitle,
-                cost: min(input.budget, idea.cost + input.transport.costBuffer),
-                minutes: min(input.hours * 60, idea.minutes + input.transport.timeBufferMinutes),
+                cost: adjustedCost,
+                minutes: adjustedMinutes,
                 steps: idea.steps,
                 tags: Array(Set(idea.tags + [input.transport.rawValue])).sorted(),
                 systemImage: idea.systemImage,
@@ -683,7 +686,7 @@ enum PlanGenerator {
                 distanceMeters: idea.distanceMeters,
                 mapURL: idea.mapURL,
                 coordinate: idea.coordinate,
-                transportMode: input.transport
+                transportMode: isDestinationIdea ? idea.transportMode : input.transport
             )
         }
         let maxMinutes = input.hours * 60
@@ -738,6 +741,75 @@ enum PlanGenerator {
                 idea("食べ歩き2軒", "軽い店を2つ選んで満足度を上げる", 2800, 120, ["食事", "散歩", "満足"], "takeoutbag.and.cup.and.straw", ["1軒目は軽食にする", "15分歩いて次の候補へ向かう", "2軒目は甘いものか麺類で締める"]),
                 idea("市場か地下街ランチ", "迷う楽しさ込みの食事プラン", 1800, 80, ["ランチ", "短時間", "雨でも可"], "fork.knife", ["市場、商店街、地下街のどれかへ行く", "行列が短い店を優先する", "残り予算で持ち帰りを1つ買う"])
             ]
+        }
+    }
+
+    private static func destinationIdeas(for input: PlannerInput) -> [PlanIdea] {
+        guard input.transport == .transit else { return [] }
+
+        let location = input.locationName
+        let isNagoya = ["名古屋", "名古屋駅", "栄", "金山"].contains { location.contains($0) }
+        guard isNagoya else { return [] }
+
+        let ideas: [PlanIdea] = [
+            PlanIdea(
+                title: "京都・伏見稲荷と町歩き",
+                subtitle: "名古屋から公共交通で京都へ行き、伏見稲荷大社と周辺のお店を短時間で巡る",
+                cost: 7600,
+                minutes: 180,
+                steps: ["名古屋から京都方面へ移動する", "伏見稲荷大社を参拝して参道を歩く", "残り時間で茶屋か土産店に寄る"],
+                tags: ["名古屋発", "京都", "寺社", "公共交通"],
+                systemImage: "tram",
+                placeName: "伏見稲荷大社",
+                address: "京都市伏見区",
+                distanceMeters: nil,
+                mapURL: URL(string: "http://maps.apple.com/?daddr=34.9671,135.7727&dirflg=r"),
+                coordinate: LocatedPoint(latitude: 34.9671, longitude: 135.7727),
+                transportMode: .transit
+            ),
+            PlanIdea(
+                title: "京都・錦市場と寺町通",
+                subtitle: "食べ歩きと商店街を中心に、3時間前後でも満足感を作る遠出案",
+                cost: 8000,
+                minutes: 180,
+                steps: ["名古屋から京都中心部へ移動する", "錦市場で食べ歩きする", "寺町通や周辺の店を見て戻る"],
+                tags: ["名古屋発", "京都", "市場", "食べ歩き"],
+                systemImage: "fork.knife",
+                placeName: "錦市場",
+                address: "京都市中京区",
+                distanceMeters: nil,
+                mapURL: URL(string: "http://maps.apple.com/?daddr=35.0050,135.7648&dirflg=r"),
+                coordinate: LocatedPoint(latitude: 35.0050, longitude: 135.7648),
+                transportMode: .transit
+            ),
+            PlanIdea(
+                title: "犬山城下町と茶屋",
+                subtitle: "名古屋から近距離で、城下町・寺社・甘味を組み合わせる",
+                cost: 3600,
+                minutes: 150,
+                steps: ["名古屋から犬山へ移動する", "城下町を歩いて店を巡る", "茶屋か甘味処で休む"],
+                tags: ["名古屋発", "城下町", "茶屋", "公共交通"],
+                systemImage: "building.columns",
+                placeName: "犬山城下町",
+                address: "愛知県犬山市",
+                distanceMeters: nil,
+                mapURL: URL(string: "http://maps.apple.com/?daddr=35.3883,136.9393&dirflg=r"),
+                coordinate: LocatedPoint(latitude: 35.3883, longitude: 136.9393),
+                transportMode: .transit
+            )
+        ]
+
+        return ideas.filter { idea in
+            switch input.mood {
+            case .relax:
+                return idea.tags.contains("茶屋") || idea.tags.contains("寺社")
+            case .active:
+                return idea.tags.contains("京都") || idea.tags.contains("城下町")
+            case .culture:
+                return idea.tags.contains("寺社") || idea.tags.contains("城下町")
+            case .food:
+                return idea.tags.contains("食べ歩き") || idea.tags.contains("市場") || idea.tags.contains("茶屋")
+            }
         }
     }
 
