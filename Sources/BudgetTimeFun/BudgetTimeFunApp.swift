@@ -155,6 +155,7 @@ struct PlannerView: View {
     @State private var input = PlannerInput()
     @State private var selectedIdea: PlanIdea?
     @State private var searchState: SearchState = .idle
+    @State private var searchTask: Task<Void, Never>?
 
     private var fallbackIdeas: [PlanIdea] {
         PlanGenerator.fallbackIdeas(for: input)
@@ -334,18 +335,28 @@ struct PlannerView: View {
 
     private func refreshNearbyPlaces() {
         guard let point = locationProvider.locatedPoint else {
+            searchTask?.cancel()
+            searchTask = nil
             searchState = .idle
             return
         }
 
-        let input = input
+        let requestInput = input
+        let requestPoint = point
+        searchTask?.cancel()
         searchState = .loading
 
-        Task {
+        searchTask = Task {
             do {
-                let ideas = try await LocationSearchService.search(input: input, point: point)
+                let ideas = try await LocationSearchService.search(input: requestInput, point: requestPoint)
+                guard !Task.isCancelled, self.input == requestInput, self.locationProvider.locatedPoint == requestPoint else {
+                    return
+                }
                 searchState = .loaded(ideas)
             } catch {
+                guard !Task.isCancelled, self.input == requestInput, self.locationProvider.locatedPoint == requestPoint else {
+                    return
+                }
                 searchState = .failed("周辺検索に失敗しました。固定プランを表示しています。")
             }
         }
