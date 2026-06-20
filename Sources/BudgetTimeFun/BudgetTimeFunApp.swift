@@ -16,6 +16,42 @@ struct PlannerInput: Equatable {
     var budget = 3000
     var hours = 3
     var mood: Mood = .relax
+    var transport: TransportMode = .walking
+}
+
+enum TransportMode: String, CaseIterable, Identifiable {
+    case walking = "徒歩"
+    case transit = "公共交通"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .walking: "figure.walk"
+        case .transit: "tram"
+        }
+    }
+
+    var appleMapsFlag: String {
+        switch self {
+        case .walking: "w"
+        case .transit: "r"
+        }
+    }
+
+    var timeBufferMinutes: Int {
+        switch self {
+        case .walking: 0
+        case .transit: 18
+        }
+    }
+
+    var costBuffer: Int {
+        switch self {
+        case .walking: 0
+        case .transit: 420
+        }
+    }
 }
 
 enum Mood: String, CaseIterable, Identifiable {
@@ -63,7 +99,7 @@ enum Mood: String, CaseIterable, Identifiable {
     }
 }
 
-struct LocatedPoint: Equatable {
+struct LocatedPoint: Equatable, Hashable {
     let latitude: Double
     let longitude: Double
 
@@ -85,6 +121,8 @@ struct PlanIdea: Identifiable, Hashable {
     let address: String?
     let distanceMeters: Double?
     let mapURL: URL?
+    let coordinate: LocatedPoint?
+    let transportMode: TransportMode
 }
 
 @MainActor
@@ -195,6 +233,9 @@ struct PlannerView: View {
             .onChange(of: input.hours) {
                 refreshNearbyPlaces()
             }
+            .onChange(of: input.transport) {
+                refreshNearbyPlaces()
+            }
             .onChange(of: locationProvider.locatedPoint) {
                 if locationProvider.locatedPoint != nil {
                     input.locationName = "現在地周辺"
@@ -252,6 +293,14 @@ struct PlannerView: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            Picker("移動手段", selection: $input.transport) {
+                ForEach(TransportMode.allCases) { mode in
+                    Label(mode.rawValue, systemImage: mode.systemImage)
+                        .tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
         }
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -296,6 +345,7 @@ struct PlannerView: View {
             InfoPill(icon: "banknote", value: "最大\(input.budget)円")
             InfoPill(icon: "timer", value: "\(input.hours)時間以内")
             InfoPill(icon: input.mood.systemImage, value: input.mood.rawValue)
+            InfoPill(icon: input.transport.systemImage, value: input.transport.rawValue)
         }
         .font(.caption)
     }
@@ -404,6 +454,7 @@ struct IdeaCard: View {
             HStack {
                 Label("\(idea.cost)円", systemImage: "yensign.circle")
                 Label("\(idea.minutes)分", systemImage: "clock")
+                Label(idea.transportMode.rawValue, systemImage: idea.transportMode.systemImage)
                 if let distance = idea.distanceMeters {
                     Label(distanceText(distance), systemImage: "figure.walk")
                 }
@@ -468,8 +519,17 @@ struct IdeaDetailView: View {
                     Label(location, systemImage: "mappin.and.ellipse")
                     Label("\(idea.cost)円目安", systemImage: "yensign.circle")
                     Label("\(idea.minutes)分目安", systemImage: "clock")
+                    Label(idea.transportMode.rawValue, systemImage: idea.transportMode.systemImage)
                     if let address = idea.address {
                         Label(address, systemImage: "signpost.right")
+                    }
+                }
+
+                if let coordinate = idea.coordinate {
+                    Section("地図") {
+                        PlaceMapView(coordinate: coordinate.coordinate, title: idea.placeName ?? idea.title)
+                            .frame(height: 220)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
 
@@ -512,7 +572,7 @@ enum LocationSearchService {
     static func search(input: PlannerInput, point: LocatedPoint) async throws -> [PlanIdea] {
         let coordinate = point.coordinate
         let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = input.mood.searchQuery
+        request.naturalLanguageQuery = input.transport == .transit ? "\(input.mood.searchQuery) train station bus stop" : input.mood.searchQuery
         request.region = MKCoordinateRegion(
             center: coordinate,
             latitudinalMeters: 2500,
@@ -527,9 +587,11 @@ enum LocationSearchService {
             guard let name = item.name else { return nil }
             let itemLocation = item.placemark.location
             let distance = itemLocation.map { $0.distance(from: origin) }
-            let travelMinutes = max(20, Int((distance ?? 600) / 70) + 35)
+            let destinationCoordinate = item.placemark.coordinate
+            let destinationPoint = LocatedPoint(latitude: destinationCoordinate.latitude, longitude: destinationCoordinate.longitude)
+            let travelMinutes = max(20, Int((distance ?? 600) / 70) + 35 + input.transport.timeBufferMinutes)
             let minutes = min(maxMinutes, max(input.mood.baseMinutes, travelMinutes))
-            let cost = min(input.budget, input.mood.baseCost)
+            let cost = min(input.budget, input.mood.baseCost + input.transport.costBuffer)
 
             guard cost <= input.budget, minutes <= maxMinutes else {
                 return nil
@@ -554,7 +616,9 @@ enum LocationSearchService {
                 placeName: name,
                 address: address.isEmpty ? nil : address,
                 distanceMeters: distance,
-                mapURL: item.url
+                mapURL: routeURL(from: coordinate, to: destinationCoordinate, mode: input.transport) ?? item.url,
+                coordinate: destinationPoint,
+                transportMode: input.transport
             )
         }
 
@@ -591,11 +655,37 @@ enum LocationSearchService {
         case .food: ["現在地から検索", "食事", "寄り道"]
         }
     }
+
+    private static func routeURL(from origin: CLLocationCoordinate2D, to destination: CLLocationCoordinate2D, mode: TransportMode) -> URL? {
+        var components = URLComponents(string: "http://maps.apple.com/")
+        components?.queryItems = [
+            URLQueryItem(name: "saddr", value: "\(origin.latitude),\(origin.longitude)"),
+            URLQueryItem(name: "daddr", value: "\(destination.latitude),\(destination.longitude)"),
+            URLQueryItem(name: "dirflg", value: mode.appleMapsFlag)
+        ]
+        return components?.url
+    }
 }
 
 enum PlanGenerator {
     static func fallbackIdeas(for input: PlannerInput) -> [PlanIdea] {
-        let base = catalog(for: input.mood, location: input.locationName)
+        let base = catalog(for: input.mood, location: input.locationName).map { idea in
+            PlanIdea(
+                title: idea.title,
+                subtitle: idea.subtitle,
+                cost: min(input.budget, idea.cost + input.transport.costBuffer),
+                minutes: min(input.hours * 60, idea.minutes + input.transport.timeBufferMinutes),
+                steps: idea.steps,
+                tags: Array(Set(idea.tags + [input.transport.rawValue])).sorted(),
+                systemImage: idea.systemImage,
+                placeName: idea.placeName,
+                address: idea.address,
+                distanceMeters: idea.distanceMeters,
+                mapURL: idea.mapURL,
+                coordinate: idea.coordinate,
+                transportMode: input.transport
+            )
+        }
         let maxMinutes = input.hours * 60
         let filtered = base.filter { $0.cost <= input.budget && $0.minutes <= maxMinutes }
 
@@ -612,7 +702,9 @@ enum PlanGenerator {
                     placeName: nil,
                     address: nil,
                     distanceMeters: nil,
-                    mapURL: nil
+                    mapURL: nil,
+                    coordinate: nil,
+                    transportMode: input.transport
                 )
             ]
         }
@@ -650,7 +742,23 @@ enum PlanGenerator {
     }
 
     private static func idea(_ title: String, _ subtitle: String, _ cost: Int, _ minutes: Int, _ tags: [String], _ systemImage: String, _ steps: [String]) -> PlanIdea {
-        PlanIdea(title: title, subtitle: subtitle, cost: cost, minutes: minutes, steps: steps, tags: tags, systemImage: systemImage, placeName: nil, address: nil, distanceMeters: nil, mapURL: nil)
+        PlanIdea(title: title, subtitle: subtitle, cost: cost, minutes: minutes, steps: steps, tags: tags, systemImage: systemImage, placeName: nil, address: nil, distanceMeters: nil, mapURL: nil, coordinate: nil, transportMode: .walking)
+    }
+}
+
+struct PlaceMapView: View {
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+
+    var body: some View {
+        Map(initialPosition: .region(MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: 900,
+            longitudinalMeters: 900
+        ))) {
+            Marker(title, coordinate: coordinate)
+        }
+        .mapStyle(.standard)
     }
 }
 

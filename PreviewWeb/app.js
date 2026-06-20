@@ -24,16 +24,22 @@ const overpassQueries = {
   food: 'node(around:1800,{lat},{lon})[amenity~"restaurant|cafe|fast_food"];node(around:1800,{lat},{lon})[shop~"bakery|convenience"];'
 };
 
+const transitQuery = 'node(around:2600,{lat},{lon})[railway~"station|halt|tram_stop"];node(around:2600,{lat},{lon})[highway="bus_stop"];node(around:2600,{lat},{lon})[public_transport~"station|stop_position|platform"];';
 const moodCosts = { relax: 1400, active: 1200, culture: 1600, food: 2200 };
 const moodMinutes = { relax: 110, active: 120, culture: 100, food: 90 };
 const moodLabels = { relax: "ゆっくり", active: "動きたい", culture: "発見したい", food: "食べたい" };
+const travelLabels = { walk: "徒歩", transit: "公共交通" };
 
 let mood = "relax";
+let travelMode = "walk";
 let coords = null;
 let places = [];
 let placesMood = null;
+let placesTravelMode = null;
 let isSearching = false;
 let searchRequestId = 0;
+let map = null;
+let mapMarkers = [];
 
 const locationInput = document.querySelector("#location");
 const budgetInput = document.querySelector("#budget");
@@ -44,6 +50,7 @@ const cards = document.querySelector("#cards");
 const count = document.querySelector("#count");
 const locationStatus = document.querySelector("#locationStatus");
 const useLocationButton = document.querySelector("#useLocation");
+const mapStatus = document.querySelector("#mapStatus");
 
 document.querySelectorAll(".moods button").forEach((button) => {
   button.addEventListener("click", async () => {
@@ -55,7 +62,25 @@ document.querySelectorAll(".moods button").forEach((button) => {
     mood = nextMood;
     places = [];
     placesMood = null;
+    placesTravelMode = null;
     document.querySelectorAll(".moods button").forEach((item) => item.classList.toggle("active", item === button));
+    render();
+    searchNearby();
+  });
+});
+
+document.querySelectorAll(".travel-modes button").forEach((button) => {
+  button.addEventListener("click", () => {
+    const nextMode = button.dataset.travel;
+    if (nextMode === travelMode) {
+      return;
+    }
+
+    travelMode = nextMode;
+    places = [];
+    placesMood = null;
+    placesTravelMode = null;
+    document.querySelectorAll(".travel-modes button").forEach((item) => item.classList.toggle("active", item === button));
     render();
     searchNearby();
   });
@@ -96,17 +121,23 @@ async function searchNearby() {
   if (!coords) {
     places = [];
     placesMood = null;
+    placesTravelMode = null;
     return;
   }
 
   const requestId = ++searchRequestId;
   const requestMood = mood;
+  const requestTravelMode = travelMode;
   const requestCoords = { ...coords };
   isSearching = true;
   render();
 
   try {
-    const body = `[out:json][timeout:12];(${overpassQueries[requestMood].replaceAll("{lat}", requestCoords.lat).replaceAll("{lon}", requestCoords.lon)});out center 12;`;
+    const queryParts = [
+      overpassQueries[requestMood],
+      requestTravelMode === "transit" ? transitQuery : ""
+    ].join("");
+    const body = `[out:json][timeout:12];(${queryParts.replaceAll("{lat}", requestCoords.lat).replaceAll("{lon}", requestCoords.lon)});out center 16;`;
     const response = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=UTF-8" },
@@ -118,7 +149,7 @@ async function searchNearby() {
     }
 
     const data = await response.json();
-    if (requestId !== searchRequestId || requestMood !== mood) {
+    if (requestId !== searchRequestId || requestMood !== mood || requestTravelMode !== travelMode) {
       return;
     }
 
@@ -132,6 +163,7 @@ async function searchNearby() {
           lat,
           lon,
           distance: lat && lon ? distanceMeters(requestCoords.lat, requestCoords.lon, lat, lon) : null,
+          kind: placeKind(item.tags),
           address: [item.tags["addr:city"], item.tags["addr:street"], item.tags["addr:housenumber"]].filter(Boolean).join(" ")
         };
       })
@@ -139,14 +171,16 @@ async function searchNearby() {
       .sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999))
       .slice(0, 6);
     placesMood = requestMood;
+    placesTravelMode = requestTravelMode;
   } catch (error) {
-    if (requestId !== searchRequestId || requestMood !== mood) {
+    if (requestId !== searchRequestId || requestMood !== mood || requestTravelMode !== travelMode) {
       return;
     }
 
     locationStatus.textContent = "周辺検索に失敗しました。固定プランを表示しています。";
     places = [];
     placesMood = null;
+    placesTravelMode = null;
   } finally {
     if (requestId === searchRequestId) {
       isSearching = false;
@@ -163,8 +197,8 @@ function render() {
   budgetValue.textContent = `${budget.toLocaleString("ja-JP")}円`;
   hoursValue.textContent = `${hours}時間`;
 
-  const activePlaces = placesMood === mood ? places : [];
-  let ideas = activePlaces.length ? activePlaces.map((place) => placeIdea(place, budget, maxMinutes, placesMood)) : fallbackIdeas(location, budget, maxMinutes);
+  const activePlaces = placesMood === mood && placesTravelMode === travelMode ? places : [];
+  let ideas = activePlaces.length ? activePlaces.map((place) => placeIdea(place, budget, maxMinutes, placesMood, placesTravelMode)) : fallbackIdeas(location, budget, maxMinutes);
   ideas = ideas.filter((idea) => idea.cost <= budget && idea.minutes <= maxMinutes);
 
   if (ideas.length === 0) {
@@ -186,12 +220,18 @@ function render() {
       <div class="meta">
         <span class="pill">${idea.cost.toLocaleString("ja-JP")}円</span>
         <span class="pill">${idea.minutes}分</span>
+        <span class="pill">${travelLabels[travelMode]}</span>
         ${idea.place?.distance ? `<span class="pill">${formatDistance(idea.place.distance)}</span>` : ""}
       </div>
-      ${idea.place ? `<p class="place">${escapeHtml(idea.place.address || "現在地周辺")}<br><a href="https://www.google.com/maps/search/?api=1&query=${idea.place.lat},${idea.place.lon}" target="_blank" rel="noreferrer">地図で開く</a></p>` : ""}
+      ${idea.place ? `<p class="place">${escapeHtml([idea.place.kind, idea.place.address || "現在地周辺"].filter(Boolean).join(" / "))}</p>
+      <div class="route-links">
+        <a href="${routeUrl(idea.place, "walk")}" target="_blank" rel="noreferrer">徒歩ルート</a>
+        <a href="${routeUrl(idea.place, "transit")}" target="_blank" rel="noreferrer">公共交通ルート</a>
+      </div>` : ""}
       <div class="tags">${idea.tags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}</div>
     </article>
   `).join("");
+  updateMap(ideas);
 }
 
 function fallbackIdeas(location, budget, maxMinutes) {
@@ -200,17 +240,79 @@ function fallbackIdeas(location, budget, maxMinutes) {
     .filter((idea) => idea.cost <= budget && idea.minutes <= maxMinutes);
 }
 
-function placeIdea(place, budget, maxMinutes, ideaMood) {
+function placeIdea(place, budget, maxMinutes, ideaMood, ideaTravelMode) {
   const travelMinutes = Math.max(20, Math.round((place.distance ?? 600) / 70) + 35);
-  const minutes = Math.min(maxMinutes, Math.max(moodMinutes[ideaMood], travelMinutes));
+  const modeExtra = ideaTravelMode === "transit" ? 18 : 0;
+  const minutes = Math.min(maxMinutes, Math.max(moodMinutes[ideaMood], travelMinutes + modeExtra));
   return {
     title: `${place.name}へ行く`,
-    subtitle: `${moodLabels[ideaMood]}目的で、現在地から行ける場所として表示しています。`,
-    cost: Math.min(budget, moodCosts[ideaMood]),
+    subtitle: `${moodLabels[ideaMood]}目的で、${travelLabels[ideaTravelMode]}でも行きやすい場所として表示しています。`,
+    cost: Math.min(budget, moodCosts[ideaMood] + (ideaTravelMode === "transit" ? 420 : 0)),
     minutes,
-    tags: ["現在地から検索", moodLabels[ideaMood], "地図表示"],
+    tags: ["現在地から検索", moodLabels[ideaMood], travelLabels[ideaTravelMode], "地図表示"],
     place
   };
+}
+
+function initMap() {
+  if (map || !window.L) {
+    return;
+  }
+
+  map = L.map("map", { zoomControl: true }).setView([35.6812, 139.7671], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+}
+
+function updateMap(ideas) {
+  initMap();
+  if (!map) {
+    return;
+  }
+
+  mapMarkers.forEach((marker) => marker.remove());
+  mapMarkers = [];
+
+  if (coords) {
+    mapMarkers.push(L.marker([coords.lat, coords.lon]).addTo(map).bindPopup("現在地"));
+  }
+
+  ideas
+    .filter((idea) => idea.place)
+    .forEach((idea) => {
+      const marker = L.marker([idea.place.lat, idea.place.lon])
+        .addTo(map)
+        .bindPopup(`<strong>${escapeHtml(idea.place.name)}</strong><br>${escapeHtml(idea.place.kind || "候補地")}`);
+      mapMarkers.push(marker);
+    });
+
+  if (mapMarkers.length > 1) {
+    const group = L.featureGroup(mapMarkers);
+    map.fitBounds(group.getBounds().pad(0.18));
+    mapStatus.textContent = `${mapMarkers.length - (coords ? 1 : 0)}件を地図表示`;
+  } else if (coords) {
+    map.setView([coords.lat, coords.lon], 14);
+    mapStatus.textContent = "現在地を表示";
+  } else {
+    mapStatus.textContent = "現在地未取得";
+  }
+}
+
+function routeUrl(place, mode) {
+  const origin = coords ? `${coords.lat},${coords.lon}` : "";
+  const destination = `${place.lat},${place.lon}`;
+  const travelmode = mode === "transit" ? "transit" : "walking";
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=${travelmode}`;
+}
+
+function placeKind(tags) {
+  if (tags.railway || tags.public_transport || tags.highway === "bus_stop") return "駅・バス停";
+  if (tags.amenity === "restaurant" || tags.amenity === "cafe" || tags.shop === "bakery") return "飲食";
+  if (tags.tourism === "museum" || tags.tourism === "gallery" || tags.shop === "books") return "文化";
+  if (tags.leisure) return "屋外・運動";
+  return "候補地";
 }
 
 function distanceMeters(lat1, lon1, lat2, lon2) {
@@ -237,3 +339,4 @@ function escapeHtml(value) {
 }
 
 render();
+initMap();

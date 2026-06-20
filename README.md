@@ -14,7 +14,10 @@
 - MapKit `MKLocalSearch` で目的別の周辺候補を検索
 - 候補名、距離、所要時間、予算目安をカード表示
 - 候補詳細から地図を開く
-- Web プレビューではブラウザ Geolocation と OpenStreetMap Overpass API で周辺候補を表示
+- 徒歩 / 公共交通の移動手段を切り替え
+- Web プレビューでは OpenStreetMap の地図に現在地と候補ピンを表示
+- Web プレビューではブラウザ Geolocation と OpenStreetMap Overpass API で周辺候補、駅、バス停を表示
+- Google Maps の徒歩ルート / 公共交通ルートを開くリンクを表示
 
 ## Xcode で開く
 
@@ -28,4 +31,4 @@
 
 https://ailiferyoya-gif.github.io/BudgetTimeFunIOS/PreviewWeb/
 
-ブラウザで現在地取得を許可すると、目的に合わせた周辺候補が表示されます。
+ブラウザで現在地取得を許可すると、目的と移動手段に合わせた周辺候補が地図付きで表示されます。

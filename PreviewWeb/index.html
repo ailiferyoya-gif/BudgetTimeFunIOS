@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>予算時間プラン Preview</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,6 +16,11 @@
       <p id="locationStatus" class="status">現在地は未取得です。手入力だけでも候補を表示できます。</p>
       <label>金額 <strong id="budgetValue">3,000円</strong><input id="budget" type="range" min="0" max="20000" step="500" value="3000"></label>
       <label>時間 <strong id="hoursValue">3時間</strong><input id="hours" type="range" min="1" max="12" step="1" value="3"></label>
+      <div class="section-title">移動手段</div>
+      <div class="travel-modes" role="group" aria-label="移動手段">
+        <button class="active" data-travel="walk">徒歩</button>
+        <button data-travel="transit">公共交通</button>
+      </div>
       <div class="moods" role="group" aria-label="目的">
         <button class="active" data-mood="relax">ゆっくり</button>
         <button data-mood="active">動きたい</button>
@@ -29,7 +35,15 @@
       </div>
       <div id="cards"></div>
     </section>
+    <section class="map-panel">
+      <div class="results-head">
+        <h1>地図</h1>
+        <span id="mapStatus">現在地未取得</span>
+      </div>
+      <div id="map"></div>
+    </section>
   </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

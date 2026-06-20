@@ -49,10 +49,18 @@ input[type="range"] {
   accent-color: #0a6b61;
 }
 
-.moods {
+.moods,
+.travel-modes {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
+}
+
+.moods {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.travel-modes {
+  grid-template-columns: repeat(2, 1fr);
 }
 
 button {
@@ -74,6 +82,20 @@ button.active,
   background: #0a6b61;
   color: #fff;
   border-color: #0a6b61;
+}
+
+.map-panel {
+  display: grid;
+  gap: 12px;
+}
+
+#map {
+  width: 100%;
+  min-height: 360px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e3ece6;
 }
 
 .status {
@@ -122,6 +144,17 @@ h1 {
 .place a {
   color: #0a6b61;
   font-weight: 700;
+}
+
+.route-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.route-links a {
+  color: #0a6b61;
+  font-weight: 750;
 }
 
 .meta,
